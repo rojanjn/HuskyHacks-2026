@@ -1,178 +1,241 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+/// <reference lib="dom" />
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, Copy, ChevronDown, ChevronUp, Clock, Zap, Globe, RotateCcw } from "lucide-react";
+import {
+  Mic, Home, Clock, Settings, HelpCircle, ChevronDown,
+} from "lucide-react";
 import {
   useTranslateText,
   useGetTranslationHistory,
-  getGetTranslationHistoryQueryKey,
   useGetExamples,
+  getGetTranslationHistoryQueryKey,
   getGetExamplesQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
+
+// ── Types ────────────────────────────────────────────────────────────────────
 
 type TranslateResponse = {
   literal_translation: string;
   contextual_meaning: string;
   slang_breakdown: Array<{ term: string; explanation: string }>;
-  tone: "formal" | "casual" | "humorous" | "sarcastic" | "aggressive" | "affectionate" | "neutral";
+  tone: string;
   cultural_notes: string;
   equivalent_phrase: string;
   detected_language: string;
 };
 
-type TranslationRecord = {
-  id: number;
-  text: string;
-  source_language: string;
-  target_language: string;
-  register: string;
-  result: TranslateResponse;
-  created_at: string;
-};
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+}
+interface ISpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  onresult: ((e: SpeechRecognitionEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((e: Event) => void) | null;
+}
+interface SpeechRecognitionConstructor { new(): ISpeechRecognition; }
+
+// ── Constants ────────────────────────────────────────────────────────────────
 
 const LANGUAGES = [
-  "Auto-detect",
-  "English",
-  "Chinese",
-  "Spanish",
-  "Japanese",
-  "Korean",
-  "French",
-  "Arabic",
-  "Hindi",
-  "Portuguese",
-  "German",
-  "Italian",
-  "Russian",
+  "Auto-detect", "English", "Indonesian", "Chinese", "Spanish",
+  "Japanese", "Korean", "French", "Arabic", "Hindi", "Portuguese", "German",
 ];
 
-const REGISTERS = [
-  { value: "formal", label: "Formal" },
-  { value: "casual", label: "Casual" },
-  { value: "slang", label: "Slang" },
-  { value: "street", label: "Street" },
-  { value: "internet", label: "Internet / Meme" },
-];
+const CONTEXTS = ["Casual", "Medical", "Legal", "School", "Business", "Tech"];
 
-const TONE_COLORS: Record<string, string> = {
-  formal: "bg-blue-500/20 text-blue-300 border-blue-500/40",
-  casual: "bg-green-500/20 text-green-300 border-green-500/40",
-  humorous: "bg-orange-500/20 text-orange-300 border-orange-500/40",
-  sarcastic: "bg-yellow-500/20 text-yellow-300 border-yellow-500/40",
-  aggressive: "bg-red-500/20 text-red-300 border-red-500/40",
-  affectionate: "bg-pink-500/20 text-pink-300 border-pink-500/40",
-  neutral: "bg-gray-500/20 text-gray-300 border-gray-500/40",
+const CONTEXT_TO_REGISTER: Record<string, "formal" | "casual" | "slang" | "street" | "internet"> = {
+  Medical: "formal", Legal: "formal", School: "formal",
+  Business: "formal", Casual: "casual", Tech: "casual",
 };
 
-function SlangPill({ term, explanation }: { term: string; explanation: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="relative inline-block">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="px-3 py-1 rounded-full text-xs font-medium border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 transition-colors cursor-pointer"
-      >
-        {term}
-      </button>
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: 6, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 6, scale: 0.95 }}
-            transition={{ duration: 0.15 }}
-            className="absolute z-50 bottom-full mb-2 left-0 min-w-[180px] max-w-[260px] rounded-lg border border-border bg-card/95 backdrop-blur-sm p-3 shadow-xl text-xs text-card-foreground"
-          >
-            <p className="font-semibold text-primary mb-1">{term}</p>
-            <p className="text-muted-foreground leading-relaxed">{explanation}</p>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
+// ── Robot mascot SVG ──────────────────────────────────────────────────────────
 
-function ResultCard({
-  title,
-  children,
-  collapsible = false,
-  delay = 0,
-}: {
-  title: string;
-  children: React.ReactNode;
-  collapsible?: boolean;
-  delay?: number;
-}) {
-  const [collapsed, setCollapsed] = useState(false);
+function RobotMascot({ size = 120, thinking = false }: { size?: number; thinking?: boolean }) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay }}
-      className="rounded-xl border border-border bg-card/80 backdrop-blur-sm overflow-hidden"
+      animate={thinking ? { y: [0, -6, 0] } : { y: [0, -3, 0] }}
+      transition={{ duration: thinking ? 1.2 : 2.5, repeat: Infinity, ease: "easeInOut" }}
+      style={{ width: size, height: size, flexShrink: 0 }}
     >
-      <button
-        className={`w-full flex items-center justify-between px-5 py-4 ${collapsible ? "cursor-pointer hover:bg-muted/20 transition-colors" : "cursor-default"}`}
-        onClick={() => collapsible && setCollapsed((c) => !c)}
-      >
-        <span className="text-xs font-semibold tracking-widest uppercase text-muted-foreground">{title}</span>
-        {collapsible && (
-          <span className="text-muted-foreground">
-            {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-          </span>
+      <svg viewBox="0 0 120 130" fill="none" xmlns="http://www.w3.org/2000/svg" width={size} height={size}>
+        {/* Cape */}
+        <ellipse cx="60" cy="115" rx="28" ry="10" fill="#1a3a6e" opacity="0.3" />
+        <path d="M35 85 Q30 110 20 118 Q60 125 100 118 Q90 110 85 85Z" fill="#2355b0" />
+        <path d="M35 85 Q30 110 20 118 Q40 120 60 118Z" fill="#1a44a0" />
+        {/* Body */}
+        <rect x="28" y="58" width="64" height="52" rx="16" fill="#2a65d0" />
+        <rect x="28" y="58" width="64" height="52" rx="16" fill="url(#bodyGrad)" />
+        {/* Belly screen */}
+        <rect x="38" y="68" width="44" height="28" rx="8" fill="#1a3a7a" opacity="0.6" />
+        <rect x="41" y="71" width="38" height="22" rx="6" fill="#0f2456" opacity="0.8" />
+        {/* Screen glow dots */}
+        <circle cx="50" cy="82" r="3" fill="#4af0a0" opacity="0.9" />
+        <circle cx="60" cy="82" r="3" fill="#4addf0" opacity="0.9" />
+        <circle cx="70" cy="82" r="3" fill="#a04af0" opacity="0.9" />
+        {/* Arms */}
+        <rect x="10" y="64" width="18" height="10" rx="5" fill="#2a65d0" />
+        <circle cx="10" cy="69" r="7" fill="#2a65d0" />
+        <rect x="92" y="64" width="18" height="10" rx="5" fill="#2a65d0" />
+        <circle cx="110" cy="69" r="7" fill="#2a65d0" />
+        {/* Neck */}
+        <rect x="52" y="48" width="16" height="12" rx="4" fill="#2a65d0" />
+        {/* Head */}
+        <rect x="22" y="14" width="76" height="56" rx="22" fill="#3070e0" />
+        <rect x="22" y="14" width="76" height="56" rx="22" fill="url(#headGrad)" />
+        {/* Antenna */}
+        <rect x="57" y="4" width="6" height="14" rx="3" fill="#2a65d0" />
+        <circle cx="60" cy="4" r="5" fill="#4af0c0" />
+        <motion.circle
+          cx="60" cy="4" r="5"
+          fill="#4af0c0"
+          animate={{ opacity: [1, 0.3, 1], r: [5, 7, 5] }}
+          transition={{ duration: 1.5, repeat: Infinity }}
+        />
+        {/* Eyes */}
+        <ellipse cx="46" cy="36" rx="11" ry="12" fill="white" />
+        <ellipse cx="74" cy="36" rx="11" ry="12" fill="white" />
+        <motion.ellipse
+          cx="46" cy="37" rx="7" ry="8"
+          fill="#1a44c0"
+          animate={thinking ? { scaleY: [1, 0.1, 1] } : { scaleY: 1 }}
+          transition={{ duration: 0.15, repeat: thinking ? Infinity : 0, repeatDelay: 2 }}
+        />
+        <motion.ellipse
+          cx="74" cy="37" rx="7" ry="8"
+          fill="#1a44c0"
+          animate={thinking ? { scaleY: [1, 0.1, 1] } : { scaleY: 1 }}
+          transition={{ duration: 0.15, repeat: thinking ? Infinity : 0, repeatDelay: 2, delay: 0.05 }}
+        />
+        <circle cx="48" cy="35" r="2.5" fill="white" />
+        <circle cx="76" cy="35" r="2.5" fill="white" />
+        {/* Mouth */}
+        {thinking ? (
+          <path d="M46 54 Q60 52 74 54" stroke="white" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+        ) : (
+          <path d="M46 54 Q60 60 74 54" stroke="white" strokeWidth="2.5" strokeLinecap="round" fill="none" />
         )}
-      </button>
-      <AnimatePresence>
-        {!collapsed && (
-          <motion.div
-            initial={collapsible ? { height: 0, opacity: 0 } : false}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.25 }}
-            className="overflow-hidden"
-          >
-            <div className="px-5 pb-5">{children}</div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+        {/* Cheek blush */}
+        <ellipse cx="34" cy="46" rx="5" ry="3" fill="#ff8aad" opacity="0.4" />
+        <ellipse cx="86" cy="46" rx="5" ry="3" fill="#ff8aad" opacity="0.4" />
+        <defs>
+          <linearGradient id="headGrad" x1="22" y1="14" x2="98" y2="70" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#5090ff" />
+            <stop offset="100%" stopColor="#2355c0" />
+          </linearGradient>
+          <linearGradient id="bodyGrad" x1="28" y1="58" x2="92" y2="110" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#3a75e0" />
+            <stop offset="100%" stopColor="#1a50b0" />
+          </linearGradient>
+        </defs>
+      </svg>
     </motion.div>
   );
 }
 
-function SkeletonCard() {
+// ── Dropdown ──────────────────────────────────────────────────────────────────
+
+function Dropdown({ value, options, onChange, label }: {
+  value: string; options: string[]; onChange: (v: string) => void; label?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+
   return (
-    <div className="rounded-xl border border-border bg-card/60 p-5 animate-pulse">
-      <div className="h-3 w-24 bg-muted rounded mb-4" />
-      <div className="space-y-2">
-        <div className="h-4 bg-muted rounded w-full" />
-        <div className="h-4 bg-muted rounded w-4/5" />
-        <div className="h-4 bg-muted rounded w-3/5" />
-      </div>
+    <div ref={ref} className="relative">
+      {label && <div className="text-[10px] text-gray-400 mb-0.5">{label}</div>}
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-full border border-gray-200 bg-white text-sm text-gray-700 font-medium hover:border-blue-300 transition-colors shadow-sm"
+      >
+        {value}
+        <ChevronDown size={13} className="text-gray-400" />
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -6, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -6, scale: 0.97 }}
+            transition={{ duration: 0.12 }}
+            className="absolute top-full mt-1 left-0 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-y-auto min-w-[140px] max-h-56"
+          >
+            {options.map((opt) => (
+              <button
+                key={opt}
+                onClick={() => { onChange(opt); setOpen(false); }}
+                className={`w-full text-left px-4 py-2 text-sm transition-colors ${
+                  value === opt ? "bg-blue-50 text-blue-600 font-semibold" : "text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {opt}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
+// ── Result Card ───────────────────────────────────────────────────────────────
+
+function ResultCard({
+  title, children, accent = false, delay = 0,
+}: {
+  title: string; children: React.ReactNode; accent?: boolean; delay?: number;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay }}
+      className={`rounded-2xl border-2 p-4 ${
+        accent ? "border-red-300 bg-white" : "border-blue-200 bg-white"
+      }`}
+    >
+      <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${accent ? "text-red-500" : "text-blue-500"}`}>
+        {title}
+      </div>
+      {children}
+    </motion.div>
+  );
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
 export function MainWorkspace() {
-  const [text, setText] = useState("");
-  const [sourceLanguage, setSourceLanguage] = useState("Auto-detect");
-  const [targetLanguage, setTargetLanguage] = useState("English");
-  const [register, setRegister] = useState("casual");
-  const [result, setResult] = useState<TranslateResponse | null>(null);
+  const [activeNav, setActiveNav] = useState("live");
+  const [fromLang, setFromLang] = useState("Auto-detect");
+  const [toLang, setToLang] = useState("English");
+  const [context, setContext] = useState("Casual");
+  const [inputText, setInputText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
-  const [micError, setMicError] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [copiedPhrase, setCopiedPhrase] = useState(false);
-  const [showExamples, setShowExamples] = useState(false);
+  const [result, setResult] = useState<TranslateResponse | null>(null);
 
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<ISpeechRecognition | null>(null);
   const queryClient = useQueryClient();
-
-  const { data: history = [] } = useGetTranslationHistory({
-    query: { queryKey: getGetTranslationHistoryQueryKey() },
-  });
 
   const { data: examples = [] } = useGetExamples({
     query: { queryKey: getGetExamplesQueryKey() },
+  });
+
+  const { data: history = [] } = useGetTranslationHistory({
+    query: { queryKey: getGetTranslationHistoryQueryKey() },
   });
 
   const translate = useTranslateText({
@@ -180,476 +243,300 @@ export function MainWorkspace() {
       onSuccess: (data) => {
         setResult(data as unknown as TranslateResponse);
         queryClient.invalidateQueries({ queryKey: getGetTranslationHistoryQueryKey() });
-        setShowExamples(false);
       },
     },
   });
 
-  const handleTranslate = () => {
-    if (!text.trim()) return;
+  const handleTranslate = useCallback(() => {
+    if (!inputText.trim()) return;
     setResult(null);
     translate.mutate({
       data: {
-        text: text.trim(),
-        sourceLanguage: sourceLanguage === "Auto-detect" ? "auto" : sourceLanguage,
-        targetLanguage,
-        register: register as "formal" | "casual" | "slang" | "street" | "internet",
+        text: inputText.trim(),
+        sourceLanguage: fromLang === "Auto-detect" ? "auto" : fromLang,
+        targetLanguage: toLang,
+        register: CONTEXT_TO_REGISTER[context] ?? "casual",
       },
     });
-  };
+  }, [inputText, fromLang, toLang, context, translate]);
 
   const handleVoiceInput = useCallback(() => {
-    setMicError(null);
-
-    if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
-      setMicError("Voice input is not supported in this browser. Try Chrome.");
-      return;
-    }
-
     if (isRecording) {
       recognitionRef.current?.stop();
       setIsRecording(false);
       return;
     }
-
-    const SpeechRecognitionAPI =
-      (window as unknown as { SpeechRecognition?: typeof SpeechRecognition; webkitSpeechRecognition?: typeof SpeechRecognition })
-        .SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
-
-    if (!SpeechRecognitionAPI) return;
-
-    const recognition = new SpeechRecognitionAPI();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "";
-
-    recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      setText((prev) => (prev ? prev + " " + transcript : transcript));
-      setMicError(null);
-    };
-
-    recognition.onend = () => setIsRecording(false);
-
-    recognition.onerror = (event) => {
+    const win = window as unknown as Record<string, unknown>;
+    const API = (
+      (win["SpeechRecognition"] as SpeechRecognitionConstructor | undefined) ??
+      (win["webkitSpeechRecognition"] as SpeechRecognitionConstructor | undefined)
+    );
+    if (!API) return;
+    const rec = new API();
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.lang = "";
+    rec.onresult = (e: SpeechRecognitionEvent) => {
+      setInputText(e.results[0][0].transcript);
       setIsRecording(false);
-      const code = (event as SpeechRecognitionErrorEvent).error;
-      if (code === "not-allowed" || code === "service-not-allowed") {
-        setMicError("Microphone access was denied. Please allow microphone permission in your browser and try again.");
-      } else if (code === "no-speech") {
-        setMicError("No speech detected. Please try again.");
-      } else if (code === "network") {
-        setMicError("Network error. Speech recognition requires an internet connection.");
-      } else {
-        setMicError(`Voice input failed (${code}). Please try again.`);
-      }
     };
-
-    try {
-      recognitionRef.current = recognition;
-      recognition.start();
-      setIsRecording(true);
-    } catch {
-      setMicError("Could not start voice input. Please try again.");
-    }
+    rec.onend = () => setIsRecording(false);
+    rec.onerror = () => setIsRecording(false);
+    recognitionRef.current = rec;
+    rec.start();
+    setIsRecording(true);
   }, [isRecording]);
 
-  const copyEquivalentPhrase = () => {
-    if (result?.equivalent_phrase) {
-      navigator.clipboard.writeText(result.equivalent_phrase);
-      setCopiedPhrase(true);
-      setTimeout(() => setCopiedPhrase(false), 2000);
-    }
-  };
-
-  const loadFromHistory = (record: TranslationRecord) => {
-    setText(record.text);
-    setSourceLanguage(record.source_language === "auto" ? "Auto-detect" : record.source_language);
-    setTargetLanguage(record.target_language);
-    setRegister(record.register);
-    setResult(record.result);
-    setSidebarOpen(false);
-  };
-
-  const handleExampleClick = (phrase: string) => {
-    setText(phrase);
-    setShowExamples(false);
-  };
-
-  useEffect(() => {
-    return () => {
-      recognitionRef.current?.stop();
-    };
-  }, []);
+  const isLoading = translate.isPending;
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border/50 bg-background/80 backdrop-blur-sm sticky top-0 z-30">
-        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Globe className="text-primary" size={20} />
-            <span className="font-bold text-lg tracking-tight text-foreground">
-              Slang<span className="text-primary">Sense</span>
-            </span>
-          </div>
-          <button
-            onClick={() => setSidebarOpen((o) => !o)}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg border border-border hover:border-primary/40"
-            data-testid="button-history"
-          >
-            <Clock size={13} />
-            History
+    <div className="flex h-screen bg-gray-100 font-sans overflow-hidden">
+
+      {/* ── Sidebar ── */}
+      <aside className="w-52 flex-shrink-0 flex flex-col bg-[#1e4db7] text-white rounded-r-3xl shadow-xl">
+        {/* Logo */}
+        <div className="px-6 pt-8 pb-6">
+          <div className="text-3xl font-black tracking-tight text-white leading-none">SayWhat</div>
+          <div className="text-blue-200 text-xs mt-1 font-medium leading-snug">Translate words,<br />Understand meaning.</div>
+        </div>
+
+        {/* Nav */}
+        <nav className="flex-1 px-4 space-y-2">
+          {[
+            { id: "live",     icon: Home,     label: "Live Translation" },
+            { id: "history",  icon: Clock,    label: "History"          },
+            { id: "settings", icon: Settings, label: "Settings"         },
+          ].map(({ id, icon: Icon, label }) => (
+            <button
+              key={id}
+              onClick={() => setActiveNav(id)}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                activeNav === id
+                  ? "bg-white text-[#1e4db7] shadow-md"
+                  : "text-blue-100 hover:bg-blue-600/50"
+              }`}
+            >
+              <Icon size={17} />
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Bottom robot + help */}
+        <div className="px-4 pb-6 flex flex-col items-center gap-3">
+          <RobotMascot size={90} thinking={isLoading} />
+          <button className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-blue-400/50 text-blue-200 text-sm font-semibold hover:bg-blue-600/40 transition-colors">
+            <HelpCircle size={15} />
+            Need help?
           </button>
         </div>
-      </header>
+      </aside>
 
-      {/* Main layout */}
-      <div className="flex-1 flex relative">
-        {/* Sidebar overlay */}
-        <AnimatePresence>
-          {sidebarOpen && (
-            <>
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-20 bg-black/60 backdrop-blur-sm"
-                onClick={() => setSidebarOpen(false)}
-              />
-              <motion.aside
-                initial={{ x: "100%" }}
-                animate={{ x: 0 }}
-                exit={{ x: "100%" }}
-                transition={{ type: "spring", damping: 30, stiffness: 300 }}
-                className="fixed right-0 top-0 bottom-0 z-30 w-80 bg-card border-l border-border flex flex-col overflow-hidden"
-              >
-                <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-                  <span className="font-semibold text-sm tracking-tight">Recent Translations</span>
-                  <button onClick={() => setSidebarOpen(false)} className="text-muted-foreground hover:text-foreground transition-colors">
-                    <RotateCcw size={14} />
-                  </button>
-                </div>
-                <div className="flex-1 overflow-y-auto py-2">
-                  {(history as TranslationRecord[]).length === 0 ? (
-                    <div className="px-5 py-8 text-center text-muted-foreground text-sm">
-                      No translations yet. Try translating something!
-                    </div>
-                  ) : (
-                    (history as TranslationRecord[]).map((record, i) => (
-                      <motion.button
-                        key={record.id}
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: i * 0.04 }}
-                        onClick={() => loadFromHistory(record)}
-                        className="w-full text-left px-5 py-3 hover:bg-muted/30 transition-colors border-b border-border/40 last:border-0"
-                        data-testid={`button-history-item-${record.id}`}
-                      >
-                        <p className="text-sm text-foreground line-clamp-1 font-medium">{record.text}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {record.source_language} → {record.target_language}
-                        </p>
-                      </motion.button>
-                    ))
-                  )}
-                </div>
-              </motion.aside>
-            </>
-          )}
-        </AnimatePresence>
+      {/* ── Main ── */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto px-8 py-6">
 
-        {/* Content */}
-        <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-8">
-          {/* Input section */}
-          <motion.section
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
-            className="rounded-2xl border border-border bg-card/60 backdrop-blur-sm overflow-hidden shadow-lg mb-6"
-          >
-            {/* Controls bar */}
-            <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-border/50">
-              <select
-                value={sourceLanguage}
-                onChange={(e) => setSourceLanguage(e.target.value)}
-                className="flex-1 min-w-[120px] text-xs bg-muted/50 border border-border rounded-lg px-3 py-2 text-foreground focus:outline-none focus:border-primary/60 transition-colors"
-                data-testid="select-source-language"
-              >
-                {LANGUAGES.map((lang) => (
-                  <option key={lang} value={lang}>{lang}</option>
-                ))}
-              </select>
+        {/* Top bar */}
+        <div className="flex items-center gap-3 mb-6">
+          <span className="text-sm text-gray-500 font-medium">From</span>
+          <Dropdown value={fromLang} options={LANGUAGES} onChange={setFromLang} />
+          <span className="text-sm text-gray-500 font-medium">translate to</span>
+          <Dropdown value={toLang} options={LANGUAGES.filter(l => l !== "Auto-detect")} onChange={setToLang} />
+          <div className="ml-auto">
+            <Dropdown value={context} options={CONTEXTS} onChange={setContext} label="Context" />
+          </div>
+        </div>
 
-              <span className="text-muted-foreground text-xs">→</span>
-
-              <select
-                value={targetLanguage}
-                onChange={(e) => setTargetLanguage(e.target.value)}
-                className="flex-1 min-w-[120px] text-xs bg-muted/50 border border-border rounded-lg px-3 py-2 text-foreground focus:outline-none focus:border-primary/60 transition-colors"
-                data-testid="select-target-language"
-              >
-                {LANGUAGES.filter((l) => l !== "Auto-detect").map((lang) => (
-                  <option key={lang} value={lang}>{lang}</option>
-                ))}
-              </select>
-
-              <select
-                value={register}
-                onChange={(e) => setRegister(e.target.value)}
-                className="flex-1 min-w-[140px] text-xs bg-muted/50 border border-border rounded-lg px-3 py-2 text-foreground focus:outline-none focus:border-primary/60 transition-colors"
-                data-testid="select-register"
-              >
-                {REGISTERS.map((r) => (
-                  <option key={r.value} value={r.value}>{r.label}</option>
-                ))}
-              </select>
+        {/* Input card */}
+        <div className="bg-white rounded-3xl shadow-sm border border-gray-200 p-5 mb-5">
+          <div className="flex items-start gap-4">
+            {/* Robot */}
+            <div className="flex-shrink-0 -mt-1">
+              <RobotMascot size={80} thinking={isLoading} />
             </div>
 
-            {/* Text area */}
-            <div className="relative">
-              <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleTranslate();
-                }}
-                placeholder="Type or paste any text — slang, idioms, dialect, internet-speak..."
-                className="w-full bg-transparent px-5 py-4 text-sm text-foreground placeholder:text-muted-foreground/60 resize-none focus:outline-none min-h-[140px] font-mono leading-relaxed"
-                data-testid="input-text"
-              />
-              {/* Voice button */}
-              <button
-                onClick={handleVoiceInput}
-                className={`absolute bottom-4 right-4 w-9 h-9 rounded-full flex items-center justify-center transition-all ${
-                  isRecording
-                    ? "bg-red-500 text-white shadow-lg shadow-red-500/40 scale-110"
-                    : "bg-muted/60 text-muted-foreground hover:bg-primary/20 hover:text-primary border border-border"
-                }`}
-                data-testid="button-voice"
-                title="Voice input"
-              >
-                {isRecording ? (
-                  <motion.div
-                    animate={{ scale: [1, 1.2, 1] }}
-                    transition={{ repeat: Infinity, duration: 1 }}
-                  >
-                    <MicOff size={15} />
-                  </motion.div>
-                ) : (
-                  <Mic size={15} />
-                )}
-              </button>
-            </div>
-
-            {/* Mic error */}
-            <AnimatePresence>
-              {micError && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="overflow-hidden"
-                >
-                  <div className="flex items-start gap-2 px-4 py-2 bg-red-500/10 border-t border-red-500/20 text-xs text-red-300">
-                    <MicOff size={12} className="mt-0.5 shrink-0" />
-                    <span>{micError}</span>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Action bar */}
-            <div className="flex items-center justify-between px-4 py-3 border-t border-border/50">
-              <button
-                onClick={() => setShowExamples((s) => !s)}
-                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors"
-                data-testid="button-examples"
-              >
-                <Zap size={12} />
-                Try an example
-              </button>
-              <div className="flex items-center gap-3">
-                {text && (
-                  <span className="text-xs text-muted-foreground/60">⌘↵ to translate</span>
-                )}
+            {/* Input area */}
+            <div className="flex-1">
+              <div className="flex items-center gap-3 mb-3">
+                <h2 className="text-xl font-bold text-blue-500">Speak or type here..</h2>
                 <motion.button
-                  whileTap={{ scale: 0.97 }}
-                  onClick={handleTranslate}
-                  disabled={translate.isPending || !text.trim()}
-                  className="px-5 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
-                  data-testid="button-translate"
+                  onClick={handleVoiceInput}
+                  whileTap={{ scale: 0.9 }}
+                  className={`w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-all ${
+                    isRecording ? "bg-red-500" : "bg-blue-500 hover:bg-blue-600"
+                  }`}
                 >
-                  {translate.isPending ? "Analyzing..." : "Translate"}
+                  {isRecording ? (
+                    <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ duration: 0.6, repeat: Infinity }}>
+                      <Mic size={16} className="text-white" />
+                    </motion.div>
+                  ) : (
+                    <Mic size={16} className="text-white" />
+                  )}
+                </motion.button>
+              </div>
+
+              <textarea
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleTranslate(); }}
+                placeholder="Translate something"
+                rows={3}
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700 placeholder:text-gray-300 resize-none focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 transition-all"
+              />
+
+              <div className="flex items-center justify-between mt-3">
+                {/* Example chips */}
+                <div className="flex gap-2 flex-wrap">
+                  {examples.slice(0, 3).map((ex, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setInputText(ex.text)}
+                      className="text-[11px] px-3 py-1.5 rounded-full bg-blue-50 text-blue-500 border border-blue-100 hover:bg-blue-100 transition-colors font-medium"
+                    >
+                      {ex.language}
+                    </button>
+                  ))}
+                </div>
+
+                <motion.button
+                  whileTap={{ scale: 0.96 }}
+                  onClick={handleTranslate}
+                  disabled={isLoading || !inputText.trim()}
+                  className="px-6 py-2 rounded-full bg-blue-500 text-white text-sm font-bold hover:bg-blue-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-md shadow-blue-200"
+                >
+                  {isLoading ? "Translating…" : "Translate →"}
                 </motion.button>
               </div>
             </div>
-          </motion.section>
+          </div>
+        </div>
 
-          {/* Examples panel */}
-          <AnimatePresence>
-            {showExamples && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden mb-6"
-              >
-                <div className="rounded-xl border border-border bg-card/60 p-4">
-                  <p className="text-xs text-muted-foreground mb-3 font-semibold tracking-wider uppercase">Sample phrases</p>
-                  <div className="flex flex-wrap gap-2">
-                    {examples.map((ex, i) => (
-                      <motion.button
-                        key={i}
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        transition={{ delay: i * 0.05 }}
-                        onClick={() => handleExampleClick(ex.text)}
-                        className="group flex flex-col items-start px-3 py-2 rounded-lg border border-border hover:border-primary/50 bg-muted/30 hover:bg-primary/10 transition-all text-left max-w-[200px]"
-                        data-testid={`button-example-${i}`}
-                      >
-                        <span className="text-xs font-medium text-foreground line-clamp-1">{ex.text}</span>
-                        <span className="text-xs text-muted-foreground/70 mt-0.5">{ex.language}</span>
-                      </motion.button>
-                    ))}
-                  </div>
+        {/* Skeleton */}
+        <AnimatePresence>
+          {isLoading && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="rounded-2xl border-2 border-gray-200 bg-white p-4 animate-pulse">
+                  <div className="h-3 w-28 bg-gray-200 rounded mb-3" />
+                  <div className="h-5 w-3/4 bg-gray-200 rounded mb-2" />
+                  <div className="h-4 w-1/2 bg-gray-200 rounded" />
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Loading skeletons */}
-          <AnimatePresence>
-            {translate.isPending && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="space-y-4"
-              >
-                {[1, 2, 3, 4].map((i) => (
-                  <SkeletonCard key={i} />
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Error state */}
-          <AnimatePresence>
-            {translate.isError && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-sm text-red-300"
-                data-testid="text-error"
-              >
-                Translation failed. Please check your connection and try again.
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Results */}
-          <AnimatePresence>
-            {result && !translate.isPending && (
-              <motion.div
-                key="results"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="space-y-4"
-              >
-                {/* Detected language badge */}
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="flex items-center gap-2 text-xs text-muted-foreground"
-                >
-                  <Globe size={12} />
-                  <span>Detected: <span className="text-primary font-medium">{result.detected_language}</span></span>
-                </motion.div>
-
-                {/* Literal Translation */}
-                <ResultCard title="Literal Translation" delay={0.05}>
-                  <p className="text-foreground text-base leading-relaxed font-mono" data-testid="text-literal-translation">
-                    {result.literal_translation}
-                  </p>
-                </ResultCard>
-
-                {/* What It Actually Means */}
-                <ResultCard title="What It Actually Means" delay={0.1}>
-                  <p className="text-foreground text-sm leading-relaxed" data-testid="text-contextual-meaning">
-                    {result.contextual_meaning}
-                  </p>
-                </ResultCard>
-
-                {/* Slang Breakdown */}
-                {result.slang_breakdown.length > 0 && (
-                  <ResultCard title="Slang / Figurative Breakdown" delay={0.15}>
-                    <div className="flex flex-wrap gap-2" data-testid="list-slang-breakdown">
-                      {result.slang_breakdown.map((item, i) => (
-                        <SlangPill key={i} term={item.term} explanation={item.explanation} />
-                      ))}
-                    </div>
-                  </ResultCard>
-                )}
-
-                {/* Tone & Natural Equivalent */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Tone */}
-                  <ResultCard title="Tone" delay={0.2}>
-                    <div className="flex items-center gap-2" data-testid="badge-tone">
-                      <span className={`px-3 py-1.5 rounded-full text-xs font-semibold border capitalize ${TONE_COLORS[result.tone] ?? TONE_COLORS.neutral}`}>
-                        {result.tone}
-                      </span>
-                    </div>
-                  </ResultCard>
-
-                  {/* Natural Equivalent */}
-                  <ResultCard title="Natural Equivalent" delay={0.25}>
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-foreground text-sm leading-relaxed font-mono flex-1" data-testid="text-equivalent-phrase">
-                        {result.equivalent_phrase}
-                      </p>
-                      <button
-                        onClick={copyEquivalentPhrase}
-                        className="shrink-0 flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors mt-0.5"
-                        data-testid="button-copy"
-                      >
-                        <Copy size={12} />
-                        {copiedPhrase ? "Copied!" : "Copy"}
-                      </button>
-                    </div>
-                  </ResultCard>
-                </div>
-
-                {/* Cultural Notes */}
-                <ResultCard title="Cultural Notes" collapsible delay={0.3}>
-                  <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-cultural-notes">
-                    {result.cultural_notes}
-                  </p>
-                </ResultCard>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Empty state */}
-          {!result && !translate.isPending && !translate.isError && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex flex-col items-center justify-center py-20 text-center"
-            >
-              <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-4">
-                <Globe className="text-primary/70" size={28} />
-              </div>
-              <p className="text-muted-foreground text-sm max-w-xs">
-                Enter any text — slang, idiom, or phrase — and SlangSense will decode its meaning, tone, and cultural context.
-              </p>
+              ))}
             </motion.div>
           )}
-        </main>
-      </div>
+        </AnimatePresence>
+
+        {/* Results */}
+        <AnimatePresence>
+          {result && !isLoading && (
+            <motion.div key="results" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+
+              {/* Literal Meaning */}
+              <ResultCard title="Literal Meaning" delay={0.05}>
+                <p className="text-gray-700 text-sm leading-relaxed">{result.literal_translation}</p>
+                {result.detected_language && (
+                  <p className="text-xs text-gray-400 mt-1">Detected: {result.detected_language}</p>
+                )}
+              </ResultCard>
+
+              {/* Contextual Meaning */}
+              <ResultCard title="Contextual Meaning" accent delay={0.1}>
+                <p className="text-gray-700 text-sm leading-relaxed">{result.contextual_meaning}</p>
+              </ResultCard>
+
+              {/* Bottom 2-column grid */}
+              <div className="grid grid-cols-2 gap-4">
+                {/* Left: Cultural Notes */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: 0.15 }}
+                  className="rounded-2xl border-2 border-gray-200 bg-white p-4 flex flex-col"
+                >
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-gray-700 mb-2">Cultural Notes</div>
+                  <p className="text-gray-600 text-sm leading-relaxed flex-1">{result.cultural_notes || "No cultural notes for this phrase."}</p>
+                  {/* Little robot bottom-left with question bubble */}
+                  <div className="flex items-end gap-2 mt-4">
+                    <div className="relative">
+                      <RobotMascot size={52} thinking={false} />
+                      <div className="absolute -top-1 -right-3 w-6 h-6 rounded-full bg-blue-100 border-2 border-blue-200 flex items-center justify-center">
+                        <span className="text-blue-500 font-black text-xs">?</span>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+
+                {/* Right: 3 stacked cards */}
+                <div className="space-y-3">
+                  {/* Slang breakdown */}
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3, delay: 0.18 }}
+                    className="rounded-2xl border-2 border-red-200 bg-white p-3"
+                  >
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-gray-700 mb-2">Slang/Figurative Breakdown</div>
+                    {result.slang_breakdown.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {result.slang_breakdown.map((item, i) => (
+                          <div key={i} className="group relative">
+                            <span className="text-xs px-3 py-1 rounded-full bg-blue-500 text-white font-semibold cursor-help shadow-sm">{item.term}</span>
+                            <div className="absolute bottom-full mb-1.5 left-0 hidden group-hover:block w-44 bg-gray-900 text-white text-xs p-2 rounded-xl shadow-xl z-50 pointer-events-none leading-relaxed">
+                              {item.explanation}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-400">No slang detected.</p>
+                    )}
+                  </motion.div>
+
+                  {/* Tone */}
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3, delay: 0.21 }}
+                    className="rounded-2xl border-2 border-red-200 bg-white p-3"
+                  >
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-gray-700 mb-1.5">Tone</div>
+                    <span className={`inline-block text-xs font-bold px-3 py-1.5 rounded-full capitalize ${
+                      result.tone === "aggressive" || result.tone === "sarcastic"
+                        ? "bg-red-100 text-red-600"
+                        : result.tone === "humorous" || result.tone === "affectionate"
+                        ? "bg-green-100 text-green-600"
+                        : result.tone === "formal"
+                        ? "bg-blue-100 text-blue-600"
+                        : "bg-gray-100 text-gray-600"
+                    }`}>
+                      {result.tone}
+                    </span>
+                  </motion.div>
+
+                  {/* Natural Equivalent */}
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3, delay: 0.24 }}
+                    className="rounded-2xl border-2 border-red-200 bg-white p-3"
+                  >
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-gray-700 mb-1.5">Natural Equivalent</div>
+                    <p className="text-sm text-gray-700 font-medium">{result.equivalent_phrase || "—"}</p>
+                  </motion.div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Empty state */}
+        {!result && !isLoading && (
+          <div className="flex flex-col items-center justify-center py-12 text-center opacity-40">
+            <RobotMascot size={64} />
+            <p className="text-sm text-gray-500 mt-3 max-w-xs">Type or speak something above to get started</p>
+          </div>
+        )}
+      </main>
     </div>
   );
 }
