@@ -1,0 +1,110 @@
+Build a full-stack web app called "SlangSense" — a smart language and slang translation app powered by the Gemini API. The app translates not just words, but meaning, cultural context, tone, and figurative language.
+
+---
+
+🧠 CORE CONCEPT:
+Users input text or voice in any major language (English, Chinese, Spanish, Japanese, Korean, French, Arabic, Hindi, Portuguese, etc.), and the app returns:
+1. A literal translation
+2. A contextual explanation (what it actually means in real usage)
+3. Slang/figurative breakdown (idioms, slang, internet-speak, Gen Z/millennial terms, regional dialect)
+4. Tone analysis (sarcastic? casual? formal? aggressive? playful?)
+5. Equivalent expression in the target language (not just a word-for-word swap)
+
+---
+
+📥 INPUT:
+- Text input box (multi-line, supports any script/language)
+- Voice input via browser Web Speech API (microphone button, auto-transcribes to text)
+- Language selector: Auto-detect OR manually pick source language
+- Target language selector (default: English)
+- "Register" dropdown: Formal / Casual / Slang / Street / Internet/Meme
+
+---
+
+⚙️ PROCESSOR — GEMINI API:
+Use Google Gemini API (gemini-1.5-flash or gemini-pro).
+Send a carefully crafted prompt to Gemini that includes:
+- The source text
+- Source language (or "auto-detect")
+- Target language
+- Register/formality level
+- Instruction to return structured JSON with fields: literal_translation, contextual_meaning, slang_breakdown (array of flagged terms with explanations), tone, cultural_notes, equivalent_phrase
+
+Parse the JSON response and render each section visually in the UI.
+
+Example Gemini system prompt to use:
+"""
+You are a cultural linguist and slang expert. The user will give you a phrase or sentence. You must return a JSON object (no markdown, pure JSON) with these fields:
+- "literal_translation": word-for-word translation to [TARGET LANGUAGE]
+- "contextual_meaning": what this phrase actually means in real conversation
+- "slang_breakdown": array of objects, each with "term" and "explanation" for any slang, idiom, or figurative language detected
+- "tone": one of [formal, casual, humorous, sarcastic, aggressive, affectionate, neutral]
+- "cultural_notes": any cultural context important for understanding the phrase
+- "equivalent_phrase": the most natural equivalent in [TARGET LANGUAGE] for a native speaker to use
+
+Always detect the source language automatically if not specified.
+"""
+
+---
+
+📤 OUTPUT UI:
+Render results in distinct visual cards:
+- 🔤 Literal Translation card
+- 💡 What It Actually Means card
+- 🤙 Slang/Figurative Breakdown card (each slang term as a pill/tag with tooltip explanation)
+- 🎭 Tone badge (colored by type: red=aggressive, yellow=sarcastic, green=casual, etc.)
+- 🌍 Cultural Notes card (collapsible)
+- 💬 Natural Equivalent card (with a "Copy" button)
+
+---
+
+🎨 UI/UX DESIGN:
+- Dark theme with neon accent colors (think language/translation meets underground culture)
+- Sleek, modern card layout with smooth animations on result reveal
+- Mobile-responsive
+- Loading skeleton while Gemini processes
+- Language flags/icons next to selectors
+- Microphone button that pulses when recording
+- History sidebar: last 10 translations saved in localStorage
+- "Examples" button that populates sample slang phrases to try (e.g., "no cap fr fr", "不装了我摊牌了", "c'est la vie", "que rollo wey")
+
+---
+
+🛠️ TECH STACK:
+- Frontend: Vanilla HTML/CSS/JS (single-page app) OR React
+- Backend: Node.js + Express (to keep Gemini API key secure server-side)
+- API: Google Gemini API via @google/generative-ai npm package
+- Voice: Browser Web Speech API (SpeechRecognition)
+- Storage: localStorage for history
+- Deployment: Replit with environment variable GEMINI_API_KEY in Replit Secrets
+
+---
+
+📁 FILE STRUCTURE:
+/
+├── server.js          # Express server, Gemini API calls
+├── public/
+│   ├── index.html
+│   ├── style.css
+│   └── app.js         # Frontend logic, voice input, fetch calls
+├── package.json
+└── .env               # GEMINI_API_KEY (use Replit Secrets)
+
+---
+
+🔒 SECURITY:
+- Never expose the Gemini API key in frontend code
+- All Gemini calls go through /api/translate POST endpoint on the server
+- Rate limit: 10 requests/minute per IP (use express-rate-limit)
+
+---
+
+✅ EXAMPLE PHRASES TO TEST:
+- "no cap fr fr, that bussin no 🧢" (Gen Z English)
+- "不装了我摊牌了" (Chinese internet slang)
+- "ostia tío, qué fuerte" (Spanish slang)
+- "it is what it is" (English idiom with deep cultural weight)
+- "ça marche" (French casual)
+- "بعمل كده عشان بحبك" (Egyptian Arabic)
+
+Start by scaffolding the full project, install dependencies, build the Express server with the /api/translate endpoint, then build the frontend UI with all output cards and voice input support.
