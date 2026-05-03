@@ -1,7 +1,7 @@
 # SayWhat
 **Translate words. Understand meaning.**
  
-🔗 [**Live Demo**](https://slang-sense--megumifir.replit.app/) &nbsp;·&nbsp; 💻 [**GitHub**](https://github.com/rojanjn/HuskyHacks-2026)
+🔗 [**Live Demo**](https://slang-sense--megumifir.replit.app/) 💻 [**GitHub**](https://github.com/rojanjn/HuskyHacks-2026) ⭐ [**Devpost**](https://devpost.com/software/dualvoice)
 
 ---
 
